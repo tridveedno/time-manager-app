@@ -1,0 +1,1515 @@
+{% raw %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resource Planning App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.20.6/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-beautiful-dnd@13.1.1/dist/react-beautiful-dnd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+   <div id="root" class="min-h-screen bg-gray-100"></div>
+    <script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+    </script>
+
+    <script type="text/javascript">
+        const embeddedLocalStorage = {
+            projects: localStorage.getItem('projects') || JSON.stringify([]),
+            members: localStorage.getItem('members') || JSON.stringify([]),
+            scenarios: localStorage.getItem('scenarios') || JSON.stringify([])
+        };
+
+        const hasInitialized = localStorage.getItem('hasInitialized');
+        if (!hasInitialized) {
+            localStorage.setItem('projects', embeddedLocalStorage.projects);
+            localStorage.setItem('members', embeddedLocalStorage.members);
+            localStorage.setItem('scenarios', embeddedLocalStorage.scenarios);
+            localStorage.setItem('hasInitialized', 'true');
+        }
+    </script>
+
+    <script type="text/babel">
+        console.log("Script started loading...");
+
+        const { useState, useEffect } = React;
+        const { DragDropContext, Droppable, Draggable } = window.ReactBeautifulDnd;
+
+        const App = () => {
+            console.log("App component initializing...");
+
+            const [projects, setProjects] = useState(() => {
+                try {
+                    const saved = localStorage.getItem('projects');
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) {
+                    console.error("Error parsing projects from localStorage:", e);
+                    return [];
+                }
+            });
+            const [members, setMembers] = useState(() => {
+                try {
+                    const saved = localStorage.getItem('members');
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) {
+                    console.error("Error parsing members from localStorage:", e);
+                    return [];
+                }
+            });
+            const [allocations, setAllocations] = useState([]);
+            const [scenarios, setScenarios] = useState(() => {
+                try {
+                    const saved = localStorage.getItem('scenarios');
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) {
+                    console.error("Error parsing scenarios from localStorage:", e);
+                    return [];
+                }
+            });
+            const [scenarioName, setScenarioName] = useState('');
+            const [newAllocation, setNewAllocation] = useState({ projectId: '', memberId: '', hours: '', startDate: '', endDate: '' });
+            const [currentWeek, setCurrentWeek] = useState(moment('2025-04-14'));
+            const [newMemberName, setNewMemberName] = useState('');
+            const [newMemberCapacity, setNewMemberCapacity] = useState('40');
+            const [newProject, setNewProject] = useState({ name: '', hours: '', startDate: '', endDate: '', status: 'Signed', hoursType: 'totalHours' });
+            const [hoursType, setHoursType] = useState('totalHours');
+            const [filterProjectId, setFilterProjectId] = useState('');
+            const [filterMemberId, setFilterMemberId] = useState('');
+            const [sortOption, setSortOption] = useState('name-asc');
+            const [showMemberAllocations, setShowMemberAllocations] = useState(null);
+            const [isMembersExpanded, setIsMembersExpanded] = useState(true);
+            const [isProjectsExpanded, setIsProjectsExpanded] = useState(false);
+            const [isAllocationsExpanded, setIsAllocationsExpanded] = useState(false);
+            const [inlineEditId, setInlineEditId] = useState(null);
+            const [inlineEditData, setInlineEditData] = useState({ hours: '', weekStart: '' });
+            const [selectedAllocs, setSelectedAllocs] = useState([]);
+            const [bulkMember, setBulkMember] = useState('');
+            const [expandedProjects, setExpandedProjects] = useState({});
+            const [selectedMember, setSelectedMember] = useState(null);
+
+            const generateUniqueId = () => {
+                return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            };
+
+            useEffect(() => {
+                fetch('/load')
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('Loaded allocations from Flask:', data);
+                        setAllocations(data);
+                    })
+                    .catch(error => {
+                        console.error('Error loading allocations:', error);
+                        setAllocations([]);
+                    });
+            }, []);
+
+            const saveAllocations = () => {
+                fetch('/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(allocations),
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('Allocations saved to Flask:', data);
+                        alert('Allocations saved successfully!');
+                    })
+                    .catch(error => {
+                        console.error('Error saving allocations:', error);
+                        alert('Failed to save allocations.');
+                    });
+            };
+
+            const clearAllData = () => {
+                if (window.confirm('Are you sure you want to clear all data? This will delete all projects, members, and allocations, but preserve saved scenarios. This action cannot be undone.')) {
+                    localStorage.removeItem('projects');
+                    localStorage.removeItem('members');
+                    localStorage.setItem('hasInitialized', 'false');
+                    setProjects([]);
+                    setMembers([]);
+                    setAllocations([]);
+                    setScenarioName('');
+                    console.log('Cleared projects, members, and allocations; preserved scenarios in localStorage.');
+                }
+            };
+
+            useEffect(() => {
+                localStorage.setItem('projects', JSON.stringify(projects));
+            }, [projects]);
+
+            useEffect(() => {
+                const memberIds = members.map(m => m.id);
+                const duplicates = memberIds.filter((id, index) => memberIds.indexOf(id) !== index);
+                if (duplicates.length > 0) {
+                    console.warn('Duplicate member IDs found:', duplicates);
+                }
+                console.log('Members state updated:', members);
+                localStorage.setItem('members', JSON.stringify(members));
+            }, [members]);
+
+            useEffect(() => {
+                console.log('Saving scenarios to localStorage:', scenarios);
+                localStorage.setItem('scenarios', JSON.stringify(scenarios));
+            }, [scenarios]);
+
+            useEffect(() => {
+                console.log('Current projects:', projects);
+                console.log('All allocations:', allocations);
+            }, [projects, allocations]);
+
+            const getWeekDates = () => {
+                const start = currentWeek.clone().startOf('week');
+                return Array.from({ length: 7 }, (_, i) => start.clone().add(i, 'days').format('YYYY-MM-DD'));
+            };
+
+            const weeks = Array.from({ length: 4 }, (_, i) => {
+                const weekStart = currentWeek.clone().startOf('week').add(i, 'weeks');
+                return {
+                    id: i + 1,
+                    label: `Week ${weekStart.week()}`,
+                    startDate: weekStart.format('YYYY-MM-DD'),
+                    endDate: weekStart.clone().endOf('week').format('YYYY-MM-DD'),
+                    displayDates: `${weekStart.format('DD/MM')}–${weekStart.clone().endOf('week').format('DD/MM')}`
+                };
+            });
+
+            const checkForDuplicateAllocation = (newAlloc) => {
+                return allocations.some(alloc =>
+                    alloc.projectId === newAlloc.projectId &&
+                    alloc.weekStart === newAlloc.weekStart &&
+                    alloc.hours === newAlloc.hours &&
+                    alloc.memberId !== newAlloc.memberId
+                );
+            };
+
+            const addAllocation = () => {
+                const { projectId, memberId, hours, startDate, endDate } = newAllocation;
+                console.log('Adding allocation:', { projectId, memberId, hours, startDate, endDate });
+                if (!projectId || !memberId || !hours || !startDate || !endDate) {
+                    return alert('Fill all fields');
+                }
+                const h = parseInt(hours);
+                const member = members.find(m => m.id === memberId);
+                const weeklyCapacity = member?.weeklyCapacity || 40;
+                if (h <= 0 || h > weeklyCapacity) return alert(`Hours must be between 1 and ${weeklyCapacity}`);
+                const start = moment(startDate).startOf('week'), end = moment(endDate).endOf('week');
+                if (start.isAfter(end)) return alert('End date must be after start date');
+                let cur = start.clone(), added = [];
+                while (cur.isSameOrBefore(end)) {
+                    const wk = cur.format('YYYY-MM-DD');
+                    const sum = allocations.filter(a => a.memberId === memberId && a.weekStart === wk)
+                        .reduce((s, a) => s + a.hours, 0) + h;
+                    if (sum > weeklyCapacity) return alert(`Week ${moment(wk).format('DD/MM/YYYY')} exceeds ${weeklyCapacity}h`);
+                    const newAlloc = {
+                        id: generateUniqueId(),
+                        projectId: +projectId,
+                        memberId: memberId,
+                        hours: h,
+                        weekStart: wk
+                    };
+                    if (checkForDuplicateAllocation(newAlloc)) {
+                        return alert(`An identical allocation (${h} hours for Project ID ${projectId} in week ${wk}) already exists for another member. Please review the allocations.`);
+                    }
+                    added.push(newAlloc);
+                    cur.add(1, 'week');
+                }
+                setAllocations(a => {
+                    const newAllocations = [...a, ...added];
+                    console.log('Updated allocations:', newAllocations);
+                    return newAllocations;
+                });
+                setNewAllocation({ projectId: '', memberId: '', hours: '', startDate: '', endDate: '' });
+            };
+
+            const deleteAllocation = id => {
+                setAllocations(a => a.filter(x => x.id !== id));
+                setSelectedAllocs(s => s.filter(x => x !== id));
+            };
+
+            const removeAllAllocationsForMember = (memberId) => {
+                console.log('Removing allocations for member ID:', memberId);
+                console.log('Member name:', members.find(m => m.id === memberId)?.name);
+                if (window.confirm(`Are you sure you want to remove all allocations for ${members.find(m => m.id === memberId)?.name}?`)) {
+                    setAllocations(a => a.filter(alloc => alloc.memberId !== memberId));
+                    setSelectedAllocs(s => s.filter(id => !allocations.find(alloc => alloc.id === id && alloc.memberId === memberId)));
+                    setShowMemberAllocations(null);
+                }
+            };
+
+            const handleDragEnd = result => {
+                if (!result.destination) return;
+                const parts = result.draggableId.split('-');
+                if (parts.length !== 2 || parts[0] !== 'alloc') {
+                    console.error('Invalid draggableId format:', result.draggableId);
+                    return;
+                }
+                const allocId = parts[1];
+                const [mId, wk] = result.destination.droppableId.split('-');
+                setAllocations(a => {
+                    const copy = a.map(item => {
+                        if (item.id === allocId) {
+                            const member = members.find(m => m.id === mId);
+                            const weeklyCapacity = member?.weeklyCapacity || 40;
+                            const others = a.filter(x => x.memberId === mId && x.weekStart === wk && x.id !== item.id);
+                            if (others.reduce((s, x) => s + x.hours, 0) + item.hours > weeklyCapacity) {
+                                alert('Overbooked');
+                                return item;
+                            }
+                            const newAlloc = { ...item, memberId: mId, weekStart: wk };
+                            if (checkForDuplicateAllocation(newAlloc)) {
+                                alert(`An identical allocation (${item.hours} hours for Project ID ${item.projectId} in week ${wk}) already exists for another member. Please review the allocations.`);
+                                return item;
+                            }
+                            return newAlloc;
+                        }
+                        return item;
+                    });
+                    console.log('Updated allocations after drag:', copy);
+                    return copy;
+                });
+            };
+
+            const calculateUtilization = (memberId, weekStart) => {
+                const hrs = allocations.filter(a => a.memberId === memberId && a.weekStart === weekStart)
+                    .reduce((s, a) => s + a.hours, 0);
+                const member = members.find(m => m.id === memberId);
+                const weeklyCapacity = member?.weeklyCapacity || 40;
+                return (hrs / weeklyCapacity) * 100;
+            };
+
+            const calculateEstimatedHours = memberId =>
+                allocations.filter(a => a.memberId === memberId).reduce((s, a) => s + a.hours, 0);
+
+            const getMemberAllocations = (memberId) => {
+                return allocations
+                    .filter(a => a.memberId === memberId)
+                    .map(a => {
+                        const project = projects.find(p => p.id === a.projectId);
+                        return {
+                            projectName: project?.name,
+                            hours: a.hours,
+                            week: `Week ${moment(a.weekStart).week()}`,
+                            dates: `${moment(a.weekStart).format('DD/MM/YYYY')} - ${moment(a.weekStart).endOf('week').format('DD/MM/YYYY')}`
+                        };
+                    });
+            };
+
+            const calculateMonthlyAvailability = (memberId, month) => {
+                const monthStart = moment(month, 'YYYY-MM');
+                const monthEnd = monthStart.clone().endOf('month');
+                const monthlyAllocations = allocations
+                    .filter(a => a.memberId === memberId && moment(a.weekStart).isBetween(monthStart, monthEnd, null, '[]'));
+                const totalHours = monthlyAllocations.reduce((sum, a) => sum + a.hours, 0);
+                const member = members.find(m => m.id === memberId);
+                const weeklyCapacity = member?.weeklyCapacity || 40;
+                const monthlyCapacity = weeklyCapacity * 4;
+                const availableHours = monthlyCapacity - totalHours;
+                return availableHours >= 0 ? availableHours : 0;
+            };
+
+            const calculateTeamUtilization = () => {
+                const month = currentWeek.format('YYYY-MM');
+                const monthStart = moment(month, 'YYYY-MM');
+                const monthEnd = moment(month, 'YYYY-MM').endOf('month');
+                const totalCapacity = members.reduce((sum, member) => sum + (member.weeklyCapacity || 40), 0) * 4;
+                const totalAssigned = allocations
+                    .filter(a => moment(a.weekStart).isBetween(monthStart, monthEnd, null, '[]'))
+                    .reduce((sum, a) => sum + a.hours, 0);
+                const utilizationPercentage = totalCapacity > 0 ? (totalAssigned / totalCapacity) * 100 : 0;
+                return { totalCapacity, totalAssigned, utilizationPercentage };
+            };
+
+            const getMonths = () => {
+                return [currentWeek.format('YYYY-MM')];
+            };
+
+            const getFilteredMembers = () => {
+                let filteredMembers = [...members];
+                if (filterMemberId) {
+                    filteredMembers = filteredMembers.filter(m => m.id === filterMemberId);
+                }
+                if (sortOption === 'name-asc') {
+                    filteredMembers.sort((a, b) => a.name.localeCompare(b.name));
+                } else if (sortOption === 'name-desc') {
+                    filteredMembers.sort((a, b) => b.name.localeCompare(b.name));
+                } else if (sortOption === 'hours-asc') {
+                    filteredMembers.sort((a, b) => {
+                        const hoursA = calculateMonthlyAvailability(a.id, getMonths()[0]);
+                        const hoursB = calculateMonthlyAvailability(b.id, getMonths()[0]);
+                        return hoursA - hoursB;
+                    });
+                } else if (sortOption === 'hours-desc') {
+                    filteredMembers.sort((a, b) => {
+                        const hoursA = calculateMonthlyAvailability(a.id, getMonths()[0]);
+                        const hoursB = calculateMonthlyAvailability(b.id, getMonths()[0]);
+                        return hoursB - hoursA;
+                    });
+                }
+                return filteredMembers;
+            };
+
+            const getFilteredAllocations = () => {
+                let filteredAllocations = [...allocations].sort((a, b) => moment(a.weekStart).diff(moment(b.weekStart)));
+                if (filterProjectId) {
+                    filteredAllocations = filteredAllocations.filter(a => a.projectId === parseInt(filterProjectId));
+                }
+                if (filterMemberId) {
+                    filteredAllocations = filteredAllocations.filter(a => a.memberId === filterMemberId);
+                }
+                console.log('Filtered allocations:', filteredAllocations);
+                return filteredAllocations;
+            };
+
+            const getGroupedAllocations = () => {
+                const filteredAllocs = getFilteredAllocations();
+                const grouped = {};
+                filteredAllocs.forEach(alloc => {
+                    const project = projects.find(p => p.id === alloc.projectId);
+                    if (!project) return;
+                    if (!grouped[alloc.projectId]) {
+                        grouped[alloc.projectId] = { project, members: {} };
+                    }
+                    if (!grouped[alloc.projectId].members[alloc.memberId]) {
+                        const member = members.find(m => m.id === alloc.memberId);
+                        if (member) {
+                            grouped[alloc.projectId].members[alloc.memberId] = { member, allocations: [] };
+                        }
+                    }
+                    if (grouped[alloc.projectId].members[alloc.memberId]) {
+                        grouped[alloc.projectId].members[alloc.memberId].allocations.push(alloc);
+                    }
+                });
+                return Object.values(grouped).sort((a, b) => a.project.name.localeCompare(b.project.name));
+            };
+
+            const resetFilters = () => {
+                setFilterProjectId('');
+                setFilterMemberId('');
+            };
+
+            const exportMonthlyAvailabilityCSV = () => {
+                const month = getMonths()[0];
+                const headers = ['Team Member', `${moment(month, 'YYYY-MM').format('MMMM')} Available Hours`];
+                const rows = getFilteredMembers().map(member => [
+                    `"${member.name}"`,
+                    calculateMonthlyAvailability(member.id, month)
+                ]);
+                const csvContent = [
+                    headers.join(','),
+                    ...rows.map(row => row.join(','))
+                ].join('\n');
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `monthly_availability_${month}.csv`;
+                link.click();
+            };
+
+            const exportUtilizationCSV = () => {
+                const headers = ['Team Member', 'Tasks', 'Est. Hours', ...weeks.map(week => `${week.label} (${week.displayDates})`)];
+                const rows = members.map(member => {
+                    const totalHours = calculateEstimatedHours(member.id);
+                    const taskCount = getMemberAllocations(member.id).length;
+                    const utilization = weeks.map(week => {
+                        const util = calculateUtilization(member.id, week.startDate);
+                        return util > 0 ? `${util.toFixed(0)}%` : '-';
+                    });
+                    return [
+                        `"${member.name}"`,
+                        taskCount,
+                        totalHours,
+                        ...utilization
+                    ];
+                });
+                const csvContent = [
+                    headers.join(','),
+                    ...rows.map(row => row.join(','))
+                ].join('\n');
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `utilization_report_${currentWeek.format('YYYY-MM')}.csv`;
+                link.click();
+            };
+
+            const addMember = () => {
+                if (newMemberName.trim() && newMemberCapacity) {
+                    const capacity = parseInt(newMemberCapacity);
+                    if (capacity <= 0) {
+                        alert('Weekly capacity must be greater than 0.');
+                        return;
+                    }
+                    const newMemberId = `member-${generateUniqueId()}`;
+                    console.log('Adding member with ID:', newMemberId);
+                    setMembers([...members, {
+                        id: newMemberId,
+                        name: newMemberName.trim(),
+                        weeklyCapacity: capacity
+                    }]);
+                    setNewMemberName('');
+                    setNewMemberCapacity('40');
+                } else {
+                    alert('Please provide both a name and weekly capacity.');
+                }
+            };
+
+            const removeMember = (id) => {
+                console.log('Attempting to remove member with ID:', id);
+                console.log('Current allocations:', allocations);
+                if (allocations.some(a => a.memberId === id)) {
+                    console.log('Member has allocations, showing allocations panel');
+                    setShowMemberAllocations(id);
+                } else {
+                    console.log('No allocations, removing member');
+                    setMembers(members.filter(m => m.id !== id));
+                }
+            };
+
+            const addProject = () => {
+                if (newProject.name && newProject.hours && newProject.startDate && newProject.endDate && newProject.status) {
+                    const hoursInput = parseInt(newProject.hours);
+                    if (hoursInput <= 0) {
+                        alert('Hours must be greater than 0.');
+                        return;
+                    }
+
+                    let totalHours;
+                    if (hoursType === 'hoursPerWeek') {
+                        const start = moment(newProject.startDate);
+                        const end = moment(newProject.endDate);
+                        const weeks = end.diff(start, 'weeks') + 1;
+                        if (weeks <= 0) {
+                            alert('End date must be after start date.');
+                            return;
+                        }
+                        totalHours = hoursInput * weeks;
+                    } else {
+                        totalHours = hoursInput;
+                    }
+
+                    const colors = [
+                        'bg-red-500',
+                        'bg-teal-500',
+                        'bg-yellow-500',
+                        'bg-purple-600',
+                        'bg-orange-500',
+                        'bg-cyan-500',
+                        'bg-pink-500',
+                        'bg-lime-500'
+                    ];
+
+                    setProjects([...projects, {
+                        id: projects.length + 1,
+                        name: newProject.name,
+                        hours: totalHours,
+                        hoursType: hoursType,
+                        hoursInput: hoursInput,
+                        color: colors[projects.length % colors.length],
+                        startDate: newProject.startDate,
+                        endDate: newProject.endDate,
+                        status: newProject.status
+                    }]);
+                    setNewProject({ name: '', hours: '', startDate: '', endDate: '', status: 'Signed', hoursType: 'totalHours' });
+                    setHoursType('totalHours');
+                }
+            };
+
+            const removeProject = (id) => {
+                if (allocations.some(a => a.projectId === id)) {
+                    alert('Cannot remove project with active allocations.');
+                    return;
+                }
+                setProjects(projects.filter(p => p.id !== id));
+            };
+
+            const toggleProjectStatus = (id) => {
+                setProjects(projects.map(project => {
+                    if (project.id === id) {
+                        return { ...project, status: project.status === 'Signed' ? 'Pipeline' : 'Signed' };
+                    }
+                    return project;
+                }));
+            };
+
+            const formatHours = hrs => {
+                const h = Math.floor(hrs), m = Math.round((hrs - h) * 60);
+                return m ? `${h}h ${m}m` : `${h}h`;
+            };
+
+            const saveScenario = () => {
+                if (!scenarioName.trim()) return alert('Name the scenario');
+                if (scenarios.some(s => s.name === scenarioName.trim())) {
+                    return alert('A scenario with this name already exists. Please choose a different name.');
+                }
+                setScenarios(s => [...s, {
+                    id: generateUniqueId(),
+                    name: scenarioName.trim(),
+                    projects: projects.map(p => ({ ...p })),
+                    members: members.map(m => ({ ...m })),
+                    allocations: allocations.map(a => ({ ...a }))
+                }]);
+                setScenarioName('');
+            };
+
+            const loadScenario = id => {
+                const s = scenarios.find(x => x.id === id);
+                if (s) {
+                    setProjects(s.projects.map(p => ({ ...p })));
+                    setMembers(s.members.map(m => ({ ...m })));
+                    setAllocations(s.allocations.map(a => ({ ...a })));
+                    console.log(`Loaded scenario "${s.name}" with ${s.projects.length} projects, ${s.members.length} members, and ${s.allocations.length} allocations.`);
+                }
+            };
+
+            const deleteScenario = id => {
+                const scenario = scenarios.find(x => x.id === id);
+                if (scenario && window.confirm(`Are you sure you want to delete the scenario "${scenario.name}"?`)) {
+                    setScenarios(s => s.filter(x => x.id !== id));
+                }
+            };
+
+            const toggleSelect = id => {
+                setSelectedAllocs(s => {
+                    return s.includes(id) ? s.filter(x => x !== id) : [...s, id];
+                });
+            };
+
+            const shiftSelectedWeek = () => {
+                setAllocations(a => a.map(x => {
+                    if (selectedAllocs.includes(x.id)) {
+                        const newWeekStart = moment(x.weekStart).add(1, 'week').startOf('week').format('YYYY-MM-DD');
+                        const newAlloc = { ...x, weekStart: newWeekStart };
+                        if (checkForDuplicateAllocation(newAlloc)) {
+                            alert(`An identical allocation (${x.hours} hours for Project ID ${x.projectId} in week ${newWeekStart}) already exists for another member. Please review the allocations.`);
+                            return x;
+                        }
+                        return newAlloc;
+                    }
+                    return x;
+                }));
+            };
+
+            const reassignSelected = () => {
+                if (!bulkMember) return alert('Select a member');
+                setAllocations(a => a.map(x => {
+                    if (selectedAllocs.includes(x.id)) {
+                        const member = members.find(m => m.id === bulkMember);
+                        const weeklyCapacity = member?.weeklyCapacity || 40;
+                        const others = a.filter(o => o.memberId === bulkMember && o.weekStart === x.weekStart && o.id !== x.id);
+                        const totalHours = others.reduce((sum, o) => sum + o.hours, 0) + x.hours;
+                        if (totalHours > weeklyCapacity) {
+                            alert(`Cannot reassign: Total hours for ${member?.name} in week starting ${x.weekStart} would exceed ${weeklyCapacity}.`);
+                            return x;
+                        }
+                        const newAlloc = { ...x, memberId: bulkMember };
+                        if (checkForDuplicateAllocation(newAlloc)) {
+                            alert(`An identical allocation (${x.hours} hours for Project ID ${x.projectId} in week ${x.weekStart}) already exists for another member. Please review the allocations.`);
+                            return x;
+                        }
+                        return newAlloc;
+                    }
+                    return x;
+                }));
+                setSelectedAllocs([]);
+                setBulkMember('');
+            };
+
+            const saveInlineEdit = () => {
+                const h = parseInt(inlineEditData.hours);
+                const memberId = allocations.find(x => x.id === inlineEditId)?.memberId;
+                const member = members.find(m => m.id === memberId);
+                const weeklyCapacity = member?.weeklyCapacity || 40;
+                if (h <= 0 || h > weeklyCapacity) return alert(`Hours must be between 1 and ${weeklyCapacity}`);
+                const others = allocations.filter(a =>
+                    a.id !== inlineEditId &&
+                    a.memberId === memberId &&
+                    a.weekStart === inlineEditData.weekStart
+                );
+                if (others.reduce((s, a) => s + a.hours, 0) + h > weeklyCapacity)
+                    return alert('Overbooked week');
+                setAllocations(a => a.map(x => {
+                    if (x.id === inlineEditId) {
+                        const newAlloc = { ...x, hours: h, weekStart: inlineEditData.weekStart };
+                        if (checkForDuplicateAllocation(newAlloc)) {
+                            alert(`An identical allocation (${h} hours for Project ID ${x.projectId} in week ${inlineEditData.weekStart}) already exists for another member. Please review the allocations.`);
+                            return x;
+                        }
+                        return newAlloc;
+                    }
+                    return x;
+                }));
+                setInlineEditId(null);
+            };
+
+            const toggleProjectExpansion = (projectId) => {
+                setExpandedProjects(prev => ({
+                    ...prev,
+                    [projectId]: !prev[projectId]
+                }));
+            };
+
+            const viewMemberAllocations = (memberId) => {
+                setSelectedMember(selectedMember === memberId ? null : memberId);
+            };
+
+            console.log("App rendering...");
+
+            const { totalCapacity, totalAssigned, utilizationPercentage } = calculateTeamUtilization();
+
+            return (
+                <div className="container mx-auto p-4 space-y-8">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-4">
+                            <h1 className="text-2xl font-bold">Resource Planning & Utilization</h1>
+                            <button
+                                className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                                onClick={clearAllData}
+                            >
+                                Clear All Data
+                            </button>
+                            <button
+                                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                                onClick={saveAllocations}
+                            >
+                                Save Allocations
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-xl shadow-md">
+                        <h2 className="text-2xl font-semibold text-gray-800 mb-4">🔮 Scenario Planner</h2>
+                        <div className="flex flex-col sm:flex-row sm:space-x-4 space-y-4 sm:space-y-0 mb-6">
+                            <input
+                                type="text"
+                                className="flex-1 border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none rounded-lg p-2 shadow-sm"
+                                placeholder="Scenario name"
+                                value={scenarioName}
+                                onChange={e => setScenarioName(e.target.value)}
+                            />
+                            <button
+                                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                                onClick={saveScenario}
+                            >
+                                Save Scenario
+                            </button>
+                        </div>
+                        {scenarios.length === 0 ? (
+                            <p className="text-gray-500 p-3 bg-gray-50 rounded-lg">No scenarios saved yet. Enter a name and click "Save Scenario" to create one.</p>
+                        ) : (
+                            <ul className="space-y-2">
+                                {scenarios
+                                    .slice()
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map(s => (
+                                        <li key={s.id} className="flex justify-between bg-gray-50 p-3 rounded">
+                                            <span className="text-gray-700">{s.name}</span>
+                                            <div className="space-x-2">
+                                                <button
+                                                    className="text-green-600 hover:text-green-700"
+                                                    onClick={() => loadScenario(s.id)}
+                                                >
+                                                    Load
+                                                </button>
+                                                <button
+                                                    className="text-red-600 hover:text-red-700"
+                                                    onClick={() => deleteScenario(s.id)}
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </li>
+                                    ))}
+                            </ul>
+                        )}
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg shadow">
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-xl font-semibold mb-2">Manage Team Members</h2>
+                            <button
+                                className="text-gray-600 hover:text-gray-800"
+                                onClick={() => setIsMembersExpanded(!isMembersExpanded)}
+                            >
+                                {isMembersExpanded ? '▼ Collapse' : '▶ Expand'}
+                            </button>
+                        </div>
+                        {isMembersExpanded && (
+                            <>
+                                <div className="flex space-x-4 mb-4">
+                                    <input
+                                        type="text"
+                                        className="border p-2 rounded flex-1"
+                                        placeholder="New member name"
+                                        value={newMemberName}
+                                        onChange={e => setNewMemberName(e.target.value)}
+                                    />
+                                    <input
+                                        type="number"
+                                        className="border p-2 rounded w-32"
+                                        placeholder="Weekly hours"
+                                        value={newMemberCapacity}
+                                        onChange={e => setNewMemberCapacity(e.target.value)}
+                                        min="1"
+                                    />
+                                    <button
+                                        className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                                        onClick={addMember}
+                                    >
+                                        Add Member
+                                    </button>
+                                </div>
+                                {members.length === 0 ? (
+                                    <p className="text-gray-500 p-3 bg-gray-50 rounded-lg">No team members added yet. Add a member above.</p>
+                                ) : (
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {members.map(member => (
+                                            <div key={member.id} className="flex justify-between items-center p-2 bg-gray-100 rounded">
+                                                <span>{member.name} ({member.weeklyCapacity}h/week)</span>
+                                                <div className="space-x-2">
+                                                    <button
+                                                        className="text-orange-500 hover:text-orange-700"
+                                                        onClick={() => removeAllAllocationsForMember(member.id)}
+                                                    >
+                                                        Clear Allocs
+                                                    </button>
+                                                    <button
+                                                        className="text-red-500 hover:text-red-700"
+                                                        onClick={() => removeMember(member.id)}
+                                                    >
+                                                        Remove
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {showMemberAllocations && (
+                                    <div className="mt-4 p-4 bg-orange-50 rounded-lg">
+                                        <h3 className="text-lg font-semibold mb-2">
+                                            Allocations for {members.find(m => m.id === showMemberAllocations)?.name}
+                                        </h3>
+                                        <p className="mb-2">Please remove these allocations to delete the member:</p>
+                                        <div className="grid grid-cols-1 gap-2">
+                                            {allocations
+                                                .filter(a => a.memberId === showMemberAllocations)
+                                                .map(allocation => {
+                                                    const project = projects.find(p => p.id === allocation.projectId);
+                                                    return (
+                                                        <div key={allocation.id} className="flex justify-between items-center p-2 bg-gray-100 rounded">
+                                                            <span>
+                                                                {project?.name}: {allocation.hours} hrs for week starting {moment(allocation.weekStart).format('DD/MM/YYYY')}
+                                                            </span>
+                                                            <button
+                                                                className="text-red-500 hover:text-red-700"
+                                                                onClick={() => deleteAllocation(allocation.id)}
+                                                            >
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    );
+                                                })}
+                                        </div>
+                                        <button
+                                            className="mt-4 bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+                                            onClick={() => setShowMemberAllocations(null)}
+                                        >
+                                            Close
+                                        </button>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg shadow">
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-xl font-semibold mb-2">Manage Projects</h2>
+                            <button
+                                className="text-gray-600 hover:text-gray-800"
+                                onClick={() => setIsProjectsExpanded(!isProjectsExpanded)}
+                            >
+                                {isProjectsExpanded ? '▼ Collapse' : '▶ Expand'}
+                            </button>
+                        </div>
+                        {isProjectsExpanded && (
+                            <>
+                                <div className="flex flex-wrap space-x-4 mb-4">
+                                    <input
+                                        type="text"
+                                        className="border p-2 rounded flex-1 min-w-[150px]"
+                                        placeholder="Project name"
+                                        value={newProject.name}
+                                        onChange={e => setNewProject({...newProject, name: e.target.value})}
+                                    />
+                                    <select
+                                        className="border p-2 rounded min-w-[120px]"
+                                        value={newProject.status}
+                                        onChange={e => setNewProject({...newProject, status: e.target.value})}
+                                    >
+                                        <option value="Signed">Signed</option>
+                                        <option value="Pipeline">Pipeline</option>
+                                    </select>
+                                    <select
+                                        className="border p-2 rounded min-w-[150px]"
+                                        value={hoursType}
+                                        onChange={e => setHoursType(e.target.value)}
+                                    >
+                                        <option value="totalHours">Total Hours</option>
+                                        <option value="hoursPerWeek">Hours/Week</option>
+                                    </select>
+                                    <input
+                                        type="number"
+                                        className="border p-2 rounded min-w-[120px]"
+                                        placeholder={hoursType === 'hoursPerWeek' ? 'Hours per week' : 'Total hours'}
+                                        value={newProject.hours}
+                                        onChange={e => setNewProject({...newProject, hours: e.target.value})}
+                                    />
+                                    <input
+                                        type="date"
+                                        className="border p-2 rounded min-w-[150px]"
+                                        value={newProject.startDate}
+                                        onChange={e => setNewProject({...newProject, startDate: e.target.value})}
+                                    />
+                                    <input
+                                        type="date"
+                                        className="border p-2 rounded min-w-[150px]"
+                                        value={newProject.endDate}
+                                        onChange={e => setNewProject({...newProject, endDate: e.target.value})}
+                                    />
+                                    <button
+                                        className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                                        onClick={addProject}
+                                    >
+                                        Add Project
+                                    </button>
+                                </div>
+                                {projects.length === 0 ? (
+                                    <p className="text-gray-500 p-3 bg-gray-50 rounded-lg">No projects added yet. Add a project above.</p>
+                                ) : (
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {projects.map(project => {
+                                            const weeks = moment(project.endDate).diff(moment(project.startDate), 'weeks') + 1;
+                                            const hoursDisplay = project.hoursType === 'hoursPerWeek'
+                                                ? `${project.hoursInput} hrs/week (Total: ${project.hours} hrs)`
+                                                : `${project.hours} hrs total${weeks > 0 ? ` (${(project.hours / weeks).toFixed(1)} hrs/week)` : ''}`;
+                                            return (
+                                                <div key={project.id} className={`flex justify-between items-center p-2 rounded ${project.status === 'Signed' ? 'bg-teal-100' : 'bg-orange-100'}`}>
+                                                    <span>
+                                                        {project.name} ({moment(project.startDate).format('DD/MM/YYYY')} - {moment(project.endDate).format('DD/MM/YYYY')}) -{' '}
+                                                        <span className={project.status === 'Signed' ? 'text-teal-600' : 'text-orange-600'}>
+                                                            {project.status}
+                                                        </span>{' '}
+                                                        - {hoursDisplay}
+                                                    </span>
+                                                    <div className="space-x-2">
+                                                        <button
+                                                            className={`text-${project.status === 'Signed' ? 'orange' : 'teal'}-500 hover:text-${project.status === 'Signed' ? 'orange' : 'teal'}-700`}
+                                                            onClick={() => toggleProjectStatus(project.id)}
+                                                        >
+                                                            {project.status === 'Signed' ? 'To Pipeline' : 'To Signed'}
+                                                        </button>
+                                                        <button
+                                                            className="text-red-500 hover:text-red-700"
+                                                            onClick={() => removeProject(project.id)}
+                                                        >
+                                                            Remove
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg shadow">
+                        <h2 className="text-xl font-semibold mb-2">Add Allocation</h2>
+                        <div className="flex space-x-4">
+                            <select
+                                className="border p-2 rounded"
+                                value={newAllocation.projectId}
+                                onChange={e => setNewAllocation({...newAllocation, projectId: e.target.value})}
+                            >
+                                <option value="">Select Project</option>
+                                {projects.map(project => (
+                                    <option key={project.id} value={project.id}>
+                                        {project.name} ({project.status})
+                                    </option>
+                                ))}
+                            </select>
+                            <select
+                                className="border p-2 rounded"
+                                value={newAllocation.memberId}
+                                onChange={e => setNewAllocation({...newAllocation, memberId: e.target.value})}
+                            >
+                                <option value="">Select Member</option>
+                                {members.map(member => (
+                                    <option key={member.id} value={member.id}>{member.name}</option>
+                                ))}
+                            </select>
+                            <input
+                                type="date"
+                                className="border p-2 rounded"
+                                value={newAllocation.startDate}
+                                onChange={e => setNewAllocation({...newAllocation, startDate: e.target.value})}
+                                placeholder="Start Date (DD/MM/YYYY)"
+                            />
+                            <input
+                                type="date"
+                                className="border p-2 rounded"
+                                value={newAllocation.endDate}
+                                onChange={e => setNewAllocation({...newAllocation, endDate: e.target.value})}
+                                placeholder="End Date (DD/MM/YYYY)"
+                            />
+                            <input
+                                type="number"
+                                className="border p-2 rounded"
+                                placeholder="Hours per week"
+                                value={newAllocation.hours}
+                                onChange={e => setNewAllocation({...newAllocation, hours: e.target.value})}
+                            />
+                            <button
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                onClick={addAllocation}
+                            >
+                                Add
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg shadow">
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-xl font-semibold mb-2">
+                                Manage Allocations
+                                {(filterMemberId || filterProjectId) && (
+                                    <span className="text-sm text-orange-600 ml-2">
+                                        (Filters Active: {filterMemberId ? `Member ID ${filterMemberId}` : ''} {filterProjectId ? `Project ID ${filterProjectId}` : ''})
+                                    </span>
+                                )}
+                            </h2>
+                            <button
+                                className="text-gray-600 hover:text-gray-800"
+                                onClick={() => setIsAllocationsExpanded(!isAllocationsExpanded)}
+                            >
+                                {isAllocationsExpanded ? '▼ Collapse' : '▶ Expand'}
+                            </button>
+                        </div>
+                        {isAllocationsExpanded && (
+                            <div>
+                                <div className="mb-2">
+                                    <button
+                                        className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+                                        onClick={resetFilters}
+                                    >
+                                        Reset Filters
+                                    </button>
+                                </div>
+                                <div className="space-y-4">
+                                    {getGroupedAllocations().length === 0 ? (
+                                        <div className="p-2 text-gray-500">
+                                            No allocations to display. {filterMemberId || filterProjectId ? 'Filters may be applied.' : 'Add allocations above.'}
+                                        </div>
+                                    ) : (
+                                        getGroupedAllocations().map(group => (
+                                            <div key={group.project.id} className={`border rounded-lg ${group.project.status === 'Signed' ? 'bg-teal-50' : 'bg-orange-50'}`}>
+                                                <div
+                                                    className="flex justify-between items-center p-3 cursor-pointer rounded-t-lg"
+                                                    onClick={() => toggleProjectExpansion(group.project.id)}
+                                                >
+                                                    <span className="font-semibold">
+                                                        {group.project.name} (
+                                                        <span className={group.project.status === 'Signed' ? 'text-teal-600' : 'text-orange-600'}>
+                                                            {group.project.status}
+                                                        </span>) - {Object.keys(group.members).length} Members
+                                                    </span>
+                                                    <span>{expandedProjects[group.project.id] ? '▼' : '▶'}</span>
+                                                </div>
+                                                {expandedProjects[group.project.id] && (
+                                                    <div className="p-3 space-y-2">
+                                                        {Object.values(group.members).map(memberGroup => (
+                                                            <div key={memberGroup.member.id} className="ml-4">
+                                                                <div
+                                                                    className="flex justify-between items-center p-2 bg-gray-50 rounded cursor-pointer"
+                                                                    onClick={() => viewMemberAllocations(memberGroup.member.id)}
+                                                                >
+                                                                    <span>{memberGroup.member.name} - {memberGroup.allocations.length} Allocations</span>
+                                                                    <span>{selectedMember === memberGroup.member.id ? '▼' : '▶'}</span>
+                                                                </div>
+                                                                {selectedMember === memberGroup.member.id && (
+                                                                    <div className="ml-4 mt-2 space-y-2">
+                                                                        {memberGroup.allocations.map(alloc => (
+                                                                            <div key={alloc.id} className="flex justify-between items-center p-2 bg-gray-200 rounded">
+                                                                                <span>
+                                                                                    {alloc.hours} hrs for week starting {moment(alloc.weekStart).format('DD/MM/YYYY')}
+                                                                                </span>
+                                                                                <button
+                                                                                    className="text-red-500 hover:text-red-700"
+                                                                                    onClick={() => deleteAllocation(alloc.id)}
+                                                                                >
+                                                                                    Remove
+                                                                                </button>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {selectedAllocs.length > 0 && (
+                        <div className="bg-blue-50 p-4 rounded-xl shadow-md flex items-center space-x-4">
+                            <span className="text-gray-700">{selectedAllocs.length} selected</span>
+                            <button
+                                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                                onClick={shiftSelectedWeek}
+                            >
+                                Shift +1 Week
+                            </button>
+                            <select
+                                className="border p-2 rounded"
+                                value={bulkMember}
+                                onChange={e => setBulkMember(e.target.value)}
+                            >
+                                <option value="">Reassign to…</option>
+                                {members.map(m => (
+                                    <option key={m.id} value={m.id}>{m.name}</option>
+                                ))}
+                            </select>
+                            <button
+                                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                                onClick={reassignSelected}
+                            >
+                                Apply
+                            </button>
+                            <button
+                                className="text-red-600 hover:text-red-700 ml-auto"
+                                onClick={() => setSelectedAllocs([])}
+                            >
+                                Clear Selection
+                            </button>
+                        </div>
+                    )}
+
+                    <div>
+                        <h2 className="text-xl font-semibold mb-2">Timeline View</h2>
+                        <div className="bg-white p-4 rounded-lg shadow">
+                            <div className="flex flex-col sm:flex-row justify-between mb-4 space-y-2 sm:space-y-0">
+                                <div className="flex space-x-2">
+                                    <button
+                                        className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+                                        onClick={() => setCurrentWeek(currentWeek.clone().subtract(1, 'month').startOf('month'))}
+                                    >
+                                        Previous Month
+                                    </button>
+                                    <button
+                                        className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+                                        onClick={() => setCurrentWeek(currentWeek.clone().subtract(1, 'week'))}
+                                    >
+                                        Previous Week
+                                    </button>
+                                </div>
+                                <div className="flex space-x-2">
+                                    <select
+                                        className="border p-2 rounded"
+                                        value={filterProjectId}
+                                        onChange={e => setFilterProjectId(e.target.value)}
+                                    >
+                                        <option value="">All Projects</option>
+                                        {projects.map(project => (
+                                            <option key={project.id} value={project.id}>
+                                                {project.name} ({project.status})
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        className="border p-2 rounded"
+                                        value={filterMemberId}
+                                        onChange={e => setFilterMemberId(e.target.value)}
+                                    >
+                                        <option value="">All Members</option>
+                                        {members.map(member => (
+                                            <option key={member.id} value={member.id}>{member.name}</option>
+                                        ))}
+                                    </select>
+                                    <button
+                                        className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+                                        onClick={resetFilters}
+                                    >
+                                        Reset Filters
+                                    </button>
+                                </div>
+                                <div className="flex space-x-2">
+                                    <button
+                                        className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+                                        onClick={() => setCurrentWeek(currentWeek.clone().add(1, 'week'))}
+                                    >
+                                        Next Week
+                                    </button>
+                                    <button
+                                        className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+                                        onClick={() => setCurrentWeek(currentWeek.clone().add(1, 'month').startOf('month'))}
+                                    >
+                                        Next Month
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="text-lg font-semibold text-center mb-4">
+                                {currentWeek.format('MMMM YYYY')}
+                            </div>
+                            <DragDropContext onDragEnd={handleDragEnd}>
+                                {members.length === 0 ? (
+                                    <p className="text-gray-500 p-3 bg-gray-50 rounded-lg">No team members added yet. Add members to view the timeline.</p>
+                                ) : (
+                                    <>
+                                        <div className="grid grid-cols-5 gap-2">
+                                            <div className="font-semibold">Team Member</div>
+                                            {weeks.map(week => (
+                                                <div key={week.id} className="font-semibold text-center">
+                                                    {week.label} ({moment(week.startDate).format('DD/MM/YYYY')} - {moment(week.endDate).format('DD/MM/YYYY')})
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {getFilteredMembers().map(member => (
+                                            <div key={member.id} className="grid grid-cols-5 gap-2 mt-2">
+                                                <div className="p-2 font-medium">{member.name}</div>
+                                                {weeks.map(week => (
+                                                    <Droppable key={`${member.id}-${week.startDate}`} droppableId={`${member.id}-${week.startDate}`}>
+                                                        {(provided) => (
+                                                            <div
+                                                                className="p-2 bg-gray-50 min-h-[100px] rounded"
+                                                                {...provided.droppableProps}
+                                                                ref={provided.innerRef}
+                                                            >
+                                                                {getFilteredAllocations()
+                                                                    .filter(a => a.memberId === member.id && a.weekStart === week.startDate)
+                                                                    .map((allocation, index) => {
+                                                                        const project = projects.find(p => p.id === allocation.projectId);
+                                                                        return (
+                                                                            <Draggable
+                                                                                key={`alloc-${allocation.id}`}
+                                                                                draggableId={`alloc-${allocation.id}`}
+                                                                                index={index}
+                                                                            >
+                                                                                {(provided) => (
+                                                                                    <div
+                                                                                        className="relative"
+                                                                                        ref={provided.innerRef}
+                                                                                        {...provided.draggableProps}
+                                                                                        {...provided.dragHandleProps}
+                                                                                    >
+                                                                                        <input
+                                                                                            type="checkbox"
+                                                                                            className="absolute top-1 right-1 w-4 h-4 z-10"
+                                                                                            checked={selectedAllocs.includes(allocation.id)}
+                                                                                            onChange={() => toggleSelect(allocation.id)}
+                                                                                        />
+                                                                                        {inlineEditId === allocation.id ? (
+                                                                                            <div className={`${project?.color} p-2 rounded flex items-center space-x-2`}>
+                                                                                                <input
+                                                                                                    type="number"
+                                                                                                    className="w-16 border rounded p-1"
+                                                                                                    value={inlineEditData.hours}
+                                                                                                    onChange={e => setInlineEditData(d => ({ ...d, hours: e.target.value }))}
+                                                                                                />
+                                                                                                <input
+                                                                                                    type="date"
+                                                                                                    className="border rounded p-1"
+                                                                                                    value={inlineEditData.weekStart}
+                                                                                                    onChange={e => setInlineEditData(d => ({
+                                                                                                        ...d,
+                                                                                                        weekStart: moment(e.target.value).startOf('week').format('YYYY-MM-DD')
+                                                                                                    }))}
+                                                                                                />
+                                                                                                <button
+                                                                                                    className="bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
+                                                                                                    onClick={saveInlineEdit}
+                                                                                                >
+                                                                                                    Save
+                                                                                                </button>
+                                                                                                <button
+                                                                                                    className="bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                                                                                                    onClick={() => setInlineEditId(null)}
+                                                                                                >
+                                                                                                    Cancel
+                                                                                                </button>
+                                                                                            </div>
+                                                                                        ) : (
+                                                                                            <div
+                                                                                                className={`${project?.color} p-2 rounded cursor-pointer relative group ${project?.status === 'Signed' ? 'bg-teal-100' : 'bg-orange-100'}`}
+                                                                                                onDoubleClick={() => {
+                                                                                                    setInlineEditId(allocation.id);
+                                                                                                    setInlineEditData({
+                                                                                                        hours: allocation.hours.toString(),
+                                                                                                        weekStart: allocation.weekStart
+                                                                                                    });
+                                                                                                }}
+                                                                                            >
+                                                                                                {project?.name} (
+                                                                                                <span className={project?.status === 'Signed' ? 'text-teal-600' : 'text-orange-600'}>
+                                                                                                    {project?.status}
+                                                                                                </span>): {allocation.hours} hrs
+                                                                                                <div className="absolute invisible group-hover:visible bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-0">
+                                                                                                    {project?.name}, {allocation.hours} hrs, {moment(allocation.weekStart).format('DD/MM/YYYY')}
+                                                                                                </div>
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+                                                                                )}
+                                                                            </Draggable>
+                                                                        );
+                                                                    })}
+                                                                {provided.placeholder}
+                                                            </div>
+                                                        )}
+                                                    </Droppable>
+                                                ))}
+                                            </div>
+                                        ))}
+                                    </>
+                                )}
+                            </DragDropContext>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div className="flex justify-between items-center mb-2">
+                            <h2 className="text-xl font-semibold">Monthly Availability Report</h2>
+                            <div className="flex space-x-2">
+                                <select
+                                    className="border p-2 rounded"
+                                    value={sortOption}
+                                    onChange={e => setSortOption(e.target.value)}
+                                >
+                                    <option value="name-asc">Sort by Name (A-Z)</option>
+                                    <option value="name-desc">Sort by Name (Z-A)</option>
+                                    <option value="hours-asc">Sort by Hours (Low to High)</option>
+                                    <option value="hours-desc">Sort by Hours (High to Low)</option>
+                                </select>
+                                <button
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                    onClick={exportMonthlyAvailabilityCSV}
+                                >
+                                    Export CSV
+                                </button>
+                            </div>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg shadow">
+                            {members.length === 0 ? (
+                                <p className="text-gray-500 p-3 bg-gray-50 rounded-lg">No team members added yet. Add members to view availability.</p>
+                            ) : (
+                                <table className="w-full bg-white shadow rounded">
+                                    <thead>
+                                        <tr className="bg-gray-200">
+                                            <th className="p-2 text-left">Team Member</th>
+                                            <th className="p-2 text-left">{moment(getMonths()[0], 'YYYY-MM').format('MMMM')}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {getFilteredMembers().map(member => (
+                                            <tr key={member.id} className="border-b">
+                                                <td className="p-2">{member.name}</td>
+                                                {getMonths().map(month => {
+                                                    const availableHours = calculateMonthlyAvailability(member.id, month);
+                                                    return (
+                                                        <td
+                                                            key={month}
+                                                            className={`p-2 ${availableHours === 0 ? 'bg-red-100 text-red-600' : 'bg-teal-100 text-teal-600'}`}
+                                                        >
+                                                            {formatHours(availableHours)}
+                                                        </td>
+                                                    );
+                                                })}
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </div>
+
+                    <div>
+                        <div className="flex justify-between items-center mb-2">
+                            <h2 className="text-xl font-semibold">Utilization Report</h2>
+                            <button
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                onClick={exportUtilizationCSV}
+                            >
+                                Export CSV
+                            </button>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg shadow">
+                            {members.length === 0 ? (
+                                <p className="text-gray-500 p-3 bg-gray-50 rounded-lg">No team members added yet. Add members to view utilization.</p>
+                            ) : (
+                                <table className="w-full bg-white shadow rounded">
+                                    <thead>
+                                        <tr className="bg-gray-200">
+                                            <th className="p-2 text-left">Team Member</th>
+                                            <th className="p-2 text-left">Tasks</th>
+                                            <th className="p-2 text-left">Est. Hours</th>
+                                            {weeks.map(week => (
+                                                <th key={week.id} className="p-2 text-left">
+                                                    {week.label} ({week.displayDates})
+                                                </th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {members.map(member => {
+                                            const totalHours = calculateEstimatedHours(member.id);
+                                            const taskCount = getMemberAllocations(member.id).length;
+                                            return (
+                                                <tr key={member.id} className="border-b">
+                                                    <td className="p-2">{member.name}</td>
+                                                    <td className="p-2">{taskCount} tasks</td>
+                                                    <td className="p-2">{formatHours(totalHours)}</td>
+                                                    {weeks.map(week => {
+                                                        const utilization = calculateUtilization(member.id, week.startDate);
+                                                        return (
+                                                            <td
+                                                                key={week.id}
+                                                                className={`p-2 ${utilization > 100 ? 'bg-red-100 text-red-600' : 'bg-teal-100 text-teal-600'}`}
+                                                            >
+                                                                {utilization > 0 ? `${utilization.toFixed(0)}%` : '-'}
+                                                            </td>
+                                                        );
+                                                    })}
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </div>
+
+                    <div>
+                        <h2 className="text-xl font-semibold mb-2">Utilization Visualization</h2>
+                        <div className="bg-white p-4 rounded-lg shadow">
+                            {members.length === 0 ? (
+                                <p className="text-gray-500 p-3 bg-gray-50 rounded-lg">No team members added yet. Add members to view utilization visualization.</p>
+                            ) : (
+                                members.map(member => {
+                                    const totalUtilization = weeks.reduce((sum, week) => {
+                                        return sum + calculateUtilization(member.id, week.startDate);
+                                    }, 0) / weeks.length;
+                                    return (
+                                        <div key={member.id} className="mb-4">
+                                            <div className="flex justify-between mb-1">
+                                                <span>{member.name}</span>
+                                                <span>{totalUtilization.toFixed(1)}%</span>
+                                            </div>
+                                            <div className="w-full bg-gray-200 rounded-full h-4">
+                                                <div
+                                                    className="bg-blue-600 h-4 rounded-full"
+                                                    style={{ width: `${Math.min(totalUtilization, 100)}%` }}
+                                                ></div>
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+
+                    <div>
+                        <h2 className="text-xl font-semibold mb-2">Project Status</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {projects.length === 0 ? (
+                                <p className="text-gray-500 p-3 bg-gray-50 rounded-lg">No projects added yet. Add projects to view status.</p>
+                            ) : (
+                                projects.map(project => {
+                                    const projectHours = allocations
+                                        .filter(a => a.projectId === project.id)
+                                        .reduce((sum, a) => sum + a.hours, 0);
+                                    return (
+                                        <div key={project.id} className={`bg-white p-4 rounded-lg shadow ${project.status === 'Signed' ? 'bg-teal-50' : 'bg-orange-50'}`}>
+                                            <h3 className="font-semibold">
+                                                {project.name} ({moment(project.startDate).format('DD-MM-YYYY')} - {moment(project.endDate).format('DD-MM-YYYY')}) -{' '}
+                                                <span className={project.status === 'Signed' ? 'text-teal-600' : 'text-orange-600'}>
+                                                    {project.status}
+                                                </span>
+                                            </h3>
+                                            <p>Allocated: {projectHours} / {project.hours} hours</p>
+                                            <p>Remaining: {project.hours - projectHours} hours</p>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg shadow">
+                        <h2 className="text-xl font-semibold mb-2">Team Utilization for {currentWeek.format('MMMM YYYY')}</h2>
+                        <div className="text-lg">
+                            <p>Total Capacity: {totalCapacity} hours</p>
+                            <p>Total Assigned: {totalAssigned} hours</p>
+                            <p className={`font-bold ${utilizationPercentage >= 100 ? 'text-red-600' : 'text-teal-600'}`}>
+                                Utilization: {utilizationPercentage.toFixed(1)}%
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        console.log("Creating root and rendering App...");
+        try {
+            const root = ReactDOM.createRoot(document.getElementById('root'));
+            root.render(<App />);
+            console.log("App rendered successfully.");
+        } catch (e) {
+            console.error("Error rendering App:", e);
+        }
+    </script>
+</body>
+</html>
+{% endraw %}
