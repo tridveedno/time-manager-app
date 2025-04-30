@@ -92,10 +92,17 @@
                         return res.json();
                     })
                     .then(data => {
+                        console.log("Loaded data:", data);
                         setProjects(data.projects || []);
-                        setMembers(data.members || []);
+                        // Ensure weeklyCapacity is set for all members
+                        const loadedMembers = (data.members || []).map(member => ({
+                            ...member,
+                            weeklyCapacity: member.weeklyCapacity || 40 // Fallback to 40 if undefined
+                        }));
+                        setMembers(loadedMembers);
                         setAllocations(data.allocations || []);
                         setScenarios(data.scenarios || []);
+                        console.log("Loaded members with capacity:", loadedMembers);
                     })
                     .catch(err => {
                         console.error('Failed to load data:', err);
@@ -475,28 +482,23 @@
                         totalHours = hoursInput;
                     }
 
-                    const colors = [
-                        'bg-red-500',
-                        'bg-teal-500',
-                        'bg-yellow-500',
-                        'bg-purple-600',
-                        'bg-orange-500',
-                        'bg-cyan-500',
-                        'bg-pink-500',
-                        'bg-lime-500'
-                    ];
+                    // Assign colors based on status
+                    const color = newProject.status === 'Pipeline' ? '#3B82F6' : '#FFFFFF'; // Tailwind's blue-500 for Pipeline
 
-                    setProjects([...projects, {
+                    const newProj = {
                         id: projects.length + 1,
                         name: newProject.name,
                         hours: totalHours,
                         hoursType: hoursType,
                         hoursInput: hoursInput,
-                        color: colors[projects.length % colors.length],
+                        color: color,
                         startDate: newProject.startDate,
                         endDate: newProject.endDate,
                         status: newProject.status
-                    }]);
+                    };
+
+                    console.log('Adding project:', newProj);
+                    setProjects([...projects, newProj]);
                     setNewProject({ name: '', hours: '', startDate: '', endDate: '', status: 'Signed', hoursType: 'totalHours' });
                     setHoursType('totalHours');
                 }
@@ -513,7 +515,9 @@
             const toggleProjectStatus = (id) => {
                 setProjects(projects.map(project => {
                     if (project.id === id) {
-                        return { ...project, status: project.status === 'Signed' ? 'Pipeline' : 'Signed' };
+                        const newStatus = project.status === 'Signed' ? 'Pipeline' : 'Signed';
+                        const newColor = newStatus === 'Pipeline' ? '#3B82F6' : '#FFFFFF'; // Tailwind's blue-500 for Pipeline
+                        return { ...project, status: newStatus, color: newColor };
                     }
                     return project;
                 }));
@@ -752,7 +756,7 @@
                                     <div className="grid grid-cols-3 gap-2">
                                         {members.map(member => (
                                             <div key={member.id} className="flex justify-between items-center p-2 bg-gray-100 rounded">
-                                                <span>{member.name} ({member.weeklyCapacity}h/week)</span>
+                                                <span>{member.name} ({member.weeklyCapacity || 'N/A'}h/week)</span>
                                                 <div className="space-x-2">
                                                     <button
                                                         className="text-orange-500 hover:text-orange-700"
@@ -881,17 +885,13 @@
                                                 ? `${project.hoursInput} hrs/week (Total: ${project.hours} hrs)`
                                                 : `${project.hours} hrs total${weeks > 0 ? ` (${(project.hours / weeks).toFixed(1)} hrs/week)` : ''}`;
                                             return (
-                                                <div key={project.id} className={`flex justify-between items-center p-2 rounded ${project.status === 'Signed' ? 'bg-teal-100' : 'bg-orange-100'}`}>
+                                                <div key={project.id} style={{ backgroundColor: project.color }} className={`flex justify-between items-center p-2 rounded ${project.status === 'Signed' ? 'border border-gray-300' : ''} ${project.status === 'Pipeline' ? 'text-white' : 'text-gray-800'}`}>
                                                     <span>
-                                                        {project.name} ({moment(project.startDate).format('DD/MM/YYYY')} - {moment(project.endDate).format('DD/MM/YYYY')}) -{' '}
-                                                        <span className={project.status === 'Signed' ? 'text-teal-600' : 'text-orange-600'}>
-                                                            {project.status}
-                                                        </span>{' '}
-                                                        - {hoursDisplay}
+                                                        {project.name} ({moment(project.startDate).format('DD/MM/YYYY')} - {moment(project.endDate).format('DD/MM/YYYY')}) - {project.status} - {hoursDisplay}
                                                     </span>
                                                     <div className="space-x-2">
                                                         <button
-                                                            className={`text-${project.status === 'Signed' ? 'orange' : 'teal'}-500 hover:text-${project.status === 'Signed' ? 'orange' : 'teal'}-700`}
+                                                            className={`hover:underline ${project.status === 'Pipeline' ? 'text-white hover:text-gray-200' : 'text-gray-600 hover:text-gray-800'}`}
                                                             onClick={() => toggleProjectStatus(project.id)}
                                                         >
                                                             {project.status === 'Signed' ? 'To Pipeline' : 'To Signed'}
@@ -972,7 +972,7 @@
                             <h2 className="text-xl font-semibold mb-2">
                                 Manage Allocations
                                 {(filterMemberId || filterProjectId) && (
-                                    <span className="text-sm text-orange-600 ml-2">
+                                    <span className="text-sm text-gray-600 ml-2">
                                         (Filters Active: {filterMemberId ? `Member ID ${filterMemberId}` : ''} {filterProjectId ? `Project ID ${filterProjectId}` : ''})
                                     </span>
                                 )}
@@ -1001,16 +1001,13 @@
                                         </div>
                                     ) : (
                                         getGroupedAllocations().map(group => (
-                                            <div key={group.project.id} className={`border rounded-lg ${group.project.status === 'Signed' ? 'bg-teal-50' : 'bg-orange-50'}`}>
+                                            <div key={group.project.id} style={{ backgroundColor: group.project.color }} className={`border rounded-lg ${group.project.status === 'Signed' ? 'border-gray-300' : ''} ${group.project.status === 'Pipeline' ? 'text-white' : 'text-gray-800'}`}>
                                                 <div
                                                     className="flex justify-between items-center p-3 cursor-pointer rounded-t-lg"
                                                     onClick={() => toggleProjectExpansion(group.project.id)}
                                                 >
                                                     <span className="font-semibold">
-                                                        {group.project.name} (
-                                                        <span className={group.project.status === 'Signed' ? 'text-teal-600' : 'text-orange-600'}>
-                                                            {group.project.status}
-                                                        </span>) - {Object.keys(group.members).length} Members
+                                                        {group.project.name} ({group.project.status}) - {Object.keys(group.members).length} Members
                                                     </span>
                                                     <span>{expandedProjects[group.project.id] ? '▼' : '▶'}</span>
                                                 </div>
@@ -1022,7 +1019,7 @@
                                                                     className="flex justify-between items-center p-2 bg-gray-50 rounded cursor-pointer"
                                                                     onClick={() => viewMemberAllocations(memberGroup.member.id)}
                                                                 >
-                                                                    <span>{memberGroup.member.name} - {memberGroup.allocations.length} Allocations</span>
+                                                                    <span>{memberGroup.member.name} - {memberGroup.member.allocations.length} Allocations</span>
                                                                     <span>{selectedMember === memberGroup.member.id ? '▼' : '▶'}</span>
                                                                 </div>
                                                                 {selectedMember === memberGroup.member.id && (
@@ -1182,6 +1179,7 @@
                                                                     .filter(a => a.memberId === member.id && a.weekStart === week.startDate)
                                                                     .map((allocation, index) => {
                                                                         const project = projects.find(p => p.id === allocation.projectId);
+                                                                        console.log(`Rendering allocation for project: ${project?.name}, Status: ${project?.status}, Color: ${project?.color}`);
                                                                         return (
                                                                             <Draggable
                                                                                 key={`alloc-${allocation.id}`}
@@ -1202,7 +1200,7 @@
                                                                                             onChange={() => toggleSelect(allocation.id)}
                                                                                         />
                                                                                         {inlineEditId === allocation.id ? (
-                                                                                            <div className={`${project?.color} p-2 rounded flex items-center space-x-2`}>
+                                                                                            <div style={{ backgroundColor: project?.color }} className={`p-2 rounded flex items-center space-x-2 ${project?.status === 'Signed' ? 'border border-gray-300' : ''} ${project?.status === 'Pipeline' ? 'text-white' : 'text-gray-800'}`}>
                                                                                                 <input
                                                                                                     type="number"
                                                                                                     className="w-16 border rounded p-1"
@@ -1233,7 +1231,8 @@
                                                                                             </div>
                                                                                         ) : (
                                                                                             <div
-                                                                                                className={`${project?.color} p-2 rounded cursor-pointer relative group ${project?.status === 'Signed' ? 'bg-teal-100' : 'bg-orange-100'}`}
+                                                                                                style={{ backgroundColor: project?.color }}
+                                                                                                className={`p-2 rounded cursor-pointer relative group ${project?.status === 'Signed' ? 'border border-gray-300' : ''} ${project?.status === 'Pipeline' ? 'text-white' : 'text-gray-800'}`}
                                                                                                 onDoubleClick={() => {
                                                                                                     setInlineEditId(allocation.id);
                                                                                                     setInlineEditData({
@@ -1242,10 +1241,7 @@
                                                                                                     });
                                                                                                 }}
                                                                                             >
-                                                                                                {project?.name} (
-                                                                                                <span className={project?.status === 'Signed' ? 'text-teal-600' : 'text-orange-600'}>
-                                                                                                    {project?.status}
-                                                                                                </span>): {allocation.hours} hrs
+                                                                                                {project?.name} ({project?.status}): {allocation.hours} hrs
                                                                                                 <div className="absolute invisible group-hover:visible bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-0">
                                                                                                     {project?.name}, {allocation.hours} hrs, {moment(allocation.weekStart).format('DD/MM/YYYY')}
                                                                                                 </div>
@@ -1420,13 +1416,16 @@
                                     const projectHours = allocations
                                         .filter(a => a.projectId === project.id)
                                         .reduce((sum, a) => sum + a.hours, 0);
+                                    // Debug log to verify project color
+                                    console.log(`Project Status - ${project.name}: Status=${project.status}, Color=${project.color}`);
                                     return (
-                                        <div key={project.id} className={`bg-white p-4 rounded-lg shadow ${project.status === 'Signed' ? 'bg-teal-50' : 'bg-orange-50'}`}>
+                                        <div
+                                            key={project.id}
+                                            style={{ backgroundColor: project.color }}
+                                            className={`p-4 rounded-lg shadow ${project.status === 'Signed' ? 'border border-gray-300' : 'bg-blue-500'} ${project.status === 'Pipeline' ? 'text-white' : 'text-gray-800'}`}
+                                        >
                                             <h3 className="font-semibold">
-                                                {project.name} ({moment(project.startDate).format('DD-MM-YYYY')} - {moment(project.endDate).format('DD-MM-YYYY')}) -{' '}
-                                                <span className={project.status === 'Signed' ? 'text-teal-600' : 'text-orange-600'}>
-                                                    {project.status}
-                                                </span>
+                                                {project.name} ({moment(project.startDate).format('DD-MM-YYYY')} - {moment(project.endDate).format('DD-MM-YYYY')}) - {project.status}
                                             </h3>
                                             <p>Allocated: {projectHours} / {project.hours} hours</p>
                                             <p>Remaining: {project.hours - projectHours} hours</p>
