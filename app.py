@@ -1,10 +1,39 @@
-from flask import Flask, render_template, request, jsonify
+from functools import wraps
+from flask import Flask, render_template, request, jsonify, Response
 from flask_cors import CORS
 import sqlite3
 import json
+import os
 
 app = Flask(__name__)
 CORS(app)
+
+# --- BASIC AUTHENTICATION SETUP ---
+USERNAME = os.environ.get('APP_USERNAME')
+PASSWORD = os.environ.get('APP_PASSWORD')
+
+# Check if environment variables are set
+if not USERNAME or not PASSWORD:
+    raise EnvironmentError("APP_USERNAME and APP_PASSWORD environment variables must be set")
+
+def check_auth(username, password):
+    return username == USERNAME and password == PASSWORD
+
+def authenticate():
+    return Response(
+        'Could not verify your login.\n'
+        'You must provide valid credentials.', 401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    )
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
 
 # --- DATABASE SETUP ---
 def init_db():
@@ -63,10 +92,12 @@ init_db()
 # --- ROUTES ---
 
 @app.route('/')
+@requires_auth
 def index():
     return render_template('index.html')
 
 @app.route('/save', methods=['POST'])
+@requires_auth
 def save_allocation():
     data = request.get_json()
     conn = sqlite3.connect('database.db')
@@ -81,6 +112,7 @@ def save_allocation():
     return jsonify({"message": "Saved successfully"}), 200
 
 @app.route('/load', methods=['GET'])
+@requires_auth
 def load_allocations():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
@@ -99,6 +131,7 @@ def load_allocations():
     return jsonify(data)
 
 @app.route('/save-all', methods=['POST'])
+@requires_auth
 def save_all():
     data = request.get_json()
 
@@ -133,6 +166,7 @@ def save_all():
     return jsonify({"message": "All data saved"}), 200
 
 @app.route('/load-all', methods=['GET'])
+@requires_auth
 def load_all():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
